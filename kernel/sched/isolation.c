@@ -131,29 +131,40 @@ void __init housekeeping_set_cpu(int cpu, enum hk_type type)
 		cpumask_set_cpu(cpu, housekeeping_cpumask_dereference(type));
 }
 
-int housekeeping_update(struct cpumask *isol_mask)
+/* Called with cpus_read_lock and cpuset_mutex held */
+struct cpumask *housekeeping_publish(struct cpumask *isol_mask)
 {
 	struct cpumask *trial, *old = NULL;
-	int err;
+
+	lockdep_assert_cpus_held();
+	lockdep_assert_cpuset_lock_held();
 
 	trial = kmalloc(cpumask_size(), GFP_KERNEL);
 	if (!trial)
-		return -ENOMEM;
+		return ERR_PTR(-ENOMEM);
 
 	cpumask_andnot(trial, housekeeping_cpumask(HK_TYPE_DOMAIN_BOOT), isol_mask);
 	if (!cpumask_intersects(trial, cpu_online_mask)) {
 		kfree(trial);
-		return -EINVAL;
+		return ERR_PTR(-EINVAL);
 	}
 
 	if (!housekeeping.flags)
-		static_branch_enable(&housekeeping_overridden);
+		static_branch_enable_cpuslocked(&housekeeping_overridden);
 
 	if (housekeeping.flags & HK_FLAG_DOMAIN)
 		old = housekeeping_cpumask_dereference(HK_TYPE_DOMAIN);
 	else
 		WRITE_ONCE(housekeeping.flags, housekeeping.flags | HK_FLAG_DOMAIN);
 	rcu_assign_pointer(housekeeping.cpumasks[HK_TYPE_DOMAIN], trial);
+
+	return old;
+}
+
+/* Called without cpus_read_lock and cpuset_mutex held */
+void housekeeping_update(struct cpumask *isol_mask, struct cpumask *old)
+{
+	int err;
 
 	synchronize_rcu();
 
@@ -171,8 +182,6 @@ int housekeeping_update(struct cpumask *isol_mask)
 	WARN_ON_ONCE(err < 0);
 
 	kfree(old);
-
-	return 0;
 }
 
 void __init housekeeping_init(void)
