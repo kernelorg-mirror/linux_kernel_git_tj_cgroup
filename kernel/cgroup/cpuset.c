@@ -1472,17 +1472,21 @@ static void cpuset_update_sd_hk_unlock(void)
 		rebuild_sched_domains_locked();
 
 	if (update_housekeeping) {
+		struct cpumask *old;
+
 		update_housekeeping = false;
 		cpumask_copy(isolated_hk_cpus, isolated_cpus);
 
 		/*
-		 * housekeeping_update() is now called without holding
-		 * cpus_read_lock and cpuset_mutex. Only cpuset_top_mutex
-		 * is still being held for mutual exclusion.
+		 * Publish the new cpumask with cpus_read_lock and cpuset_mutex
+		 * held, but call housekeeping_update() without them. Only
+		 * cpuset_top_mutex is still being held for mutual exclusion.
 		 */
+		old = housekeeping_publish(isolated_hk_cpus);
 		mutex_unlock(&cpuset_mutex);
 		cpus_read_unlock();
-		WARN_ON_ONCE(housekeeping_update(isolated_hk_cpus));
+		if (!WARN_ON_ONCE(IS_ERR(old)))
+			housekeeping_update(isolated_hk_cpus, old);
 		mutex_unlock(&cpuset_top_mutex);
 	} else {
 		cpuset_full_unlock();
